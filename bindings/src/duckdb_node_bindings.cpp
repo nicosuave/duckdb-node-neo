@@ -13,6 +13,10 @@
 
 #include "duckdb.h"
 
+// Arrow IPC support via nanoarrow
+#include "nanoarrow/nanoarrow.h"
+#include "nanoarrow/nanoarrow_ipc.h"
+
 #define DEFAULT_DUCKDB_API "node-neo-bindings"
 
 // Conversion betweeen structs and objects
@@ -1676,6 +1680,11 @@ public:
       InstanceMethod("get_data_from_pointer", &DuckDBNodeAddon::get_data_from_pointer),
       InstanceMethod("copy_data_to_vector", &DuckDBNodeAddon::copy_data_to_vector),
       InstanceMethod("copy_data_to_vector_validity", &DuckDBNodeAddon::copy_data_to_vector_validity),
+
+      // Arrow IPC support
+      InstanceMethod("result_to_arrow_ipc", &DuckDBNodeAddon::result_to_arrow_ipc),
+      InstanceMethod("result_schema_to_arrow_ipc", &DuckDBNodeAddon::result_schema_to_arrow_ipc),
+      InstanceMethod("data_chunk_to_arrow_ipc", &DuckDBNodeAddon::data_chunk_to_arrow_ipc),
     });
   }
 
@@ -5261,6 +5270,371 @@ private:
     auto target_data = reinterpret_cast<uint8_t*>(duckdb_vector_get_validity(target_vector));
     memcpy(target_data + target_byte_offset, source_data + source_byte_offset, source_byte_count);
     return env.Undefined();
+  }
+
+  // function result_to_arrow_ipc(result: Result): Uint8Array
+  Napi::Value result_to_arrow_ipc(const Napi::CallbackInfo& info) {
+    auto env = info.Env();
+    auto result_ptr = GetResultFromExternal(env, info[0]);
+
+    // Get arrow options from the result
+    duckdb_arrow_options arrow_options = duckdb_result_get_arrow_options(result_ptr);
+    if (!arrow_options) {
+      throw Napi::Error::New(env, "Failed to get arrow options from result");
+    }
+
+    // Get column count, names, and types
+    idx_t column_count = duckdb_column_count(result_ptr);
+
+    std::vector<duckdb_logical_type> types(column_count);
+    std::vector<const char*> names(column_count);
+
+    for (idx_t i = 0; i < column_count; i++) {
+      types[i] = duckdb_column_logical_type(result_ptr, i);
+      names[i] = duckdb_column_name(result_ptr, i);
+    }
+
+    // Convert to ArrowSchema
+    ArrowSchema arrow_schema;
+    memset(&arrow_schema, 0, sizeof(ArrowSchema));
+
+    duckdb_error_data error_data = duckdb_to_arrow_schema(
+      arrow_options, types.data(), names.data(), column_count, &arrow_schema
+    );
+
+    // Clean up logical types
+    for (idx_t i = 0; i < column_count; i++) {
+      duckdb_destroy_logical_type(&types[i]);
+    }
+
+    if (error_data) {
+      const char* error_msg = duckdb_error_data_message(error_data);
+      std::string error_str = error_msg ? error_msg : "Failed to create Arrow schema";
+      duckdb_destroy_error_data(&error_data);
+      duckdb_destroy_arrow_options(&arrow_options);
+      throw Napi::Error::New(env, error_str);
+    }
+
+    // Initialize output buffer and IPC writer
+    ArrowBuffer output_buffer;
+    ArrowBufferInit(&output_buffer);
+
+    ArrowIpcOutputStream output_stream;
+    ArrowErrorCode nanoarrow_err = ArrowIpcOutputStreamInitBuffer(&output_stream, &output_buffer);
+    if (nanoarrow_err != NANOARROW_OK) {
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      duckdb_destroy_arrow_options(&arrow_options);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, "Failed to initialize Arrow IPC output stream");
+    }
+
+    ArrowIpcWriter writer;
+    nanoarrow_err = ArrowIpcWriterInit(&writer, &output_stream);
+    if (nanoarrow_err != NANOARROW_OK) {
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      duckdb_destroy_arrow_options(&arrow_options);
+      if (output_stream.release) output_stream.release(&output_stream);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, "Failed to initialize Arrow IPC writer");
+    }
+
+    // Write schema
+    ArrowError arrow_error;
+    nanoarrow_err = ArrowIpcWriterWriteSchema(&writer, &arrow_schema, &arrow_error);
+    if (nanoarrow_err != NANOARROW_OK) {
+      std::string error_str = "Failed to write Arrow schema: ";
+      error_str += arrow_error.message;
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      ArrowIpcWriterReset(&writer);
+      duckdb_destroy_arrow_options(&arrow_options);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, error_str);
+    }
+
+    // Process chunks
+    idx_t chunk_count = duckdb_result_chunk_count(*result_ptr);
+    for (idx_t chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
+      duckdb_data_chunk chunk = duckdb_result_get_chunk(*result_ptr, chunk_idx);
+      if (!chunk) continue;
+
+      // Convert chunk to ArrowArray
+      ArrowArray arrow_array;
+      memset(&arrow_array, 0, sizeof(ArrowArray));
+
+      error_data = duckdb_data_chunk_to_arrow(arrow_options, chunk, &arrow_array);
+      duckdb_destroy_data_chunk(&chunk);
+
+      if (error_data) {
+        const char* error_msg = duckdb_error_data_message(error_data);
+        std::string error_str = error_msg ? error_msg : "Failed to convert chunk to Arrow";
+        duckdb_destroy_error_data(&error_data);
+        if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+        ArrowIpcWriterReset(&writer);
+        duckdb_destroy_arrow_options(&arrow_options);
+        ArrowBufferReset(&output_buffer);
+        throw Napi::Error::New(env, error_str);
+      }
+
+      // Create ArrowArrayView for writing
+      ArrowArrayView array_view;
+      ArrowArrayViewInitFromSchema(&array_view, &arrow_schema, nullptr);
+      ArrowArrayViewSetArray(&array_view, &arrow_array, nullptr);
+
+      // Write record batch
+      nanoarrow_err = ArrowIpcWriterWriteArrayView(&writer, &array_view, &arrow_error);
+
+      ArrowArrayViewReset(&array_view);
+      if (arrow_array.release) arrow_array.release(&arrow_array);
+
+      if (nanoarrow_err != NANOARROW_OK) {
+        std::string error_str = "Failed to write Arrow record batch: ";
+        error_str += arrow_error.message;
+        if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+        ArrowIpcWriterReset(&writer);
+        duckdb_destroy_arrow_options(&arrow_options);
+        ArrowBufferReset(&output_buffer);
+        throw Napi::Error::New(env, error_str);
+      }
+    }
+
+    // Clean up
+    if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+    ArrowIpcWriterReset(&writer);
+    duckdb_destroy_arrow_options(&arrow_options);
+
+    // Create result buffer - copy data since we need to free the ArrowBuffer
+    auto result_buffer = Napi::Buffer<uint8_t>::Copy(
+      env,
+      reinterpret_cast<uint8_t*>(output_buffer.data),
+      output_buffer.size_bytes
+    );
+
+    ArrowBufferReset(&output_buffer);
+
+    return result_buffer;
+  }
+
+  // function result_schema_to_arrow_ipc(result: Result): Uint8Array
+  // Converts just the schema of a DuckDB result to Arrow IPC stream format bytes
+  // This is the first message in an IPC stream, followed by record batches
+  Napi::Value result_schema_to_arrow_ipc(const Napi::CallbackInfo& info) {
+    auto env = info.Env();
+    auto result_ptr = GetResultFromExternal(env, info[0]);
+
+    // Get arrow options from the result
+    duckdb_arrow_options arrow_options = duckdb_result_get_arrow_options(result_ptr);
+    if (!arrow_options) {
+      throw Napi::Error::New(env, "Failed to get arrow options from result");
+    }
+
+    // Get column count, names, and types
+    idx_t column_count = duckdb_column_count(result_ptr);
+
+    std::vector<duckdb_logical_type> types(column_count);
+    std::vector<const char*> names(column_count);
+
+    for (idx_t i = 0; i < column_count; i++) {
+      types[i] = duckdb_column_logical_type(result_ptr, i);
+      names[i] = duckdb_column_name(result_ptr, i);
+    }
+
+    // Convert to ArrowSchema
+    ArrowSchema arrow_schema;
+    memset(&arrow_schema, 0, sizeof(ArrowSchema));
+
+    duckdb_error_data error_data = duckdb_to_arrow_schema(
+      arrow_options, types.data(), names.data(), column_count, &arrow_schema
+    );
+
+    // Clean up logical types
+    for (idx_t i = 0; i < column_count; i++) {
+      duckdb_destroy_logical_type(&types[i]);
+    }
+
+    if (error_data) {
+      const char* error_msg = duckdb_error_data_message(error_data);
+      std::string error_str = error_msg ? error_msg : "Failed to create Arrow schema";
+      duckdb_destroy_error_data(&error_data);
+      duckdb_destroy_arrow_options(&arrow_options);
+      throw Napi::Error::New(env, error_str);
+    }
+
+    // Initialize output buffer and IPC writer
+    ArrowBuffer output_buffer;
+    ArrowBufferInit(&output_buffer);
+
+    ArrowIpcOutputStream output_stream;
+    ArrowErrorCode nanoarrow_err = ArrowIpcOutputStreamInitBuffer(&output_stream, &output_buffer);
+    if (nanoarrow_err != NANOARROW_OK) {
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      duckdb_destroy_arrow_options(&arrow_options);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, "Failed to initialize Arrow IPC output stream");
+    }
+
+    ArrowIpcWriter writer;
+    nanoarrow_err = ArrowIpcWriterInit(&writer, &output_stream);
+    if (nanoarrow_err != NANOARROW_OK) {
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      duckdb_destroy_arrow_options(&arrow_options);
+      if (output_stream.release) output_stream.release(&output_stream);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, "Failed to initialize Arrow IPC writer");
+    }
+
+    // Write schema only
+    ArrowError arrow_error;
+    nanoarrow_err = ArrowIpcWriterWriteSchema(&writer, &arrow_schema, &arrow_error);
+    if (nanoarrow_err != NANOARROW_OK) {
+      std::string error_str = "Failed to write Arrow schema: ";
+      error_str += arrow_error.message;
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      ArrowIpcWriterReset(&writer);
+      duckdb_destroy_arrow_options(&arrow_options);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, error_str);
+    }
+
+    // Clean up
+    if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+    ArrowIpcWriterReset(&writer);
+    duckdb_destroy_arrow_options(&arrow_options);
+
+    // Create result buffer
+    auto result_buffer = Napi::Buffer<uint8_t>::Copy(
+      env,
+      reinterpret_cast<uint8_t*>(output_buffer.data),
+      output_buffer.size_bytes
+    );
+
+    ArrowBufferReset(&output_buffer);
+
+    return result_buffer;
+  }
+
+  // function data_chunk_to_arrow_ipc(chunk: DataChunk, result: Result): Uint8Array
+  // Converts a single data chunk to Arrow IPC record batch bytes
+  // The result is needed to get schema information (column types and names)
+  Napi::Value data_chunk_to_arrow_ipc(const Napi::CallbackInfo& info) {
+    auto env = info.Env();
+    auto chunk = GetDataChunkFromExternal(env, info[0]);
+    auto result_ptr = GetResultFromExternal(env, info[1]);
+
+    // Get arrow options from the result
+    duckdb_arrow_options arrow_options = duckdb_result_get_arrow_options(result_ptr);
+    if (!arrow_options) {
+      throw Napi::Error::New(env, "Failed to get arrow options from result");
+    }
+
+    // Get column count, names, and types for schema
+    idx_t column_count = duckdb_column_count(result_ptr);
+
+    std::vector<duckdb_logical_type> types(column_count);
+    std::vector<const char*> names(column_count);
+
+    for (idx_t i = 0; i < column_count; i++) {
+      types[i] = duckdb_column_logical_type(result_ptr, i);
+      names[i] = duckdb_column_name(result_ptr, i);
+    }
+
+    // Create ArrowSchema (needed for writing record batch)
+    ArrowSchema arrow_schema;
+    memset(&arrow_schema, 0, sizeof(ArrowSchema));
+
+    duckdb_error_data error_data = duckdb_to_arrow_schema(
+      arrow_options, types.data(), names.data(), column_count, &arrow_schema
+    );
+
+    // Clean up logical types
+    for (idx_t i = 0; i < column_count; i++) {
+      duckdb_destroy_logical_type(&types[i]);
+    }
+
+    if (error_data) {
+      const char* error_msg = duckdb_error_data_message(error_data);
+      std::string error_str = error_msg ? error_msg : "Failed to create Arrow schema";
+      duckdb_destroy_error_data(&error_data);
+      duckdb_destroy_arrow_options(&arrow_options);
+      throw Napi::Error::New(env, error_str);
+    }
+
+    // Convert chunk to ArrowArray
+    ArrowArray arrow_array;
+    memset(&arrow_array, 0, sizeof(ArrowArray));
+
+    error_data = duckdb_data_chunk_to_arrow(arrow_options, chunk, &arrow_array);
+
+    if (error_data) {
+      const char* error_msg = duckdb_error_data_message(error_data);
+      std::string error_str = error_msg ? error_msg : "Failed to convert chunk to Arrow";
+      duckdb_destroy_error_data(&error_data);
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      duckdb_destroy_arrow_options(&arrow_options);
+      throw Napi::Error::New(env, error_str);
+    }
+
+    // Initialize output buffer and IPC writer
+    ArrowBuffer output_buffer;
+    ArrowBufferInit(&output_buffer);
+
+    ArrowIpcOutputStream output_stream;
+    ArrowErrorCode nanoarrow_err = ArrowIpcOutputStreamInitBuffer(&output_stream, &output_buffer);
+    if (nanoarrow_err != NANOARROW_OK) {
+      if (arrow_array.release) arrow_array.release(&arrow_array);
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      duckdb_destroy_arrow_options(&arrow_options);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, "Failed to initialize Arrow IPC output stream");
+    }
+
+    ArrowIpcWriter writer;
+    nanoarrow_err = ArrowIpcWriterInit(&writer, &output_stream);
+    if (nanoarrow_err != NANOARROW_OK) {
+      if (arrow_array.release) arrow_array.release(&arrow_array);
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      duckdb_destroy_arrow_options(&arrow_options);
+      if (output_stream.release) output_stream.release(&output_stream);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, "Failed to initialize Arrow IPC writer");
+    }
+
+    // Create ArrowArrayView for writing
+    ArrowArrayView array_view;
+    ArrowArrayViewInitFromSchema(&array_view, &arrow_schema, nullptr);
+    ArrowArrayViewSetArray(&array_view, &arrow_array, nullptr);
+
+    // Write record batch only (no schema)
+    ArrowError arrow_error;
+    nanoarrow_err = ArrowIpcWriterWriteArrayView(&writer, &array_view, &arrow_error);
+
+    ArrowArrayViewReset(&array_view);
+    if (arrow_array.release) arrow_array.release(&arrow_array);
+
+    if (nanoarrow_err != NANOARROW_OK) {
+      std::string error_str = "Failed to write Arrow record batch: ";
+      error_str += arrow_error.message;
+      if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+      ArrowIpcWriterReset(&writer);
+      duckdb_destroy_arrow_options(&arrow_options);
+      ArrowBufferReset(&output_buffer);
+      throw Napi::Error::New(env, error_str);
+    }
+
+    // Clean up
+    if (arrow_schema.release) arrow_schema.release(&arrow_schema);
+    ArrowIpcWriterReset(&writer);
+    duckdb_destroy_arrow_options(&arrow_options);
+
+    // Create result buffer
+    auto result_buffer = Napi::Buffer<uint8_t>::Copy(
+      env,
+      reinterpret_cast<uint8_t*>(output_buffer.data),
+      output_buffer.size_bytes
+    );
+
+    ArrowBufferReset(&output_buffer);
+
+    return result_buffer;
   }
 
 };

@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      '@uwdata/flechette':
+        specifier: ^2.2.6
+        version: 2.2.6
 
   api:
     dependencies:
@@ -344,6 +348,9 @@ packages:
 
   '@types/node@20.17.10':
     resolution: {integrity: sha512-/jrvh5h6NXhEauFFexRin69nA0uHJ5gwk4iDivp/DeoEua3uwCUto6PC86IpRITBOs4+6i2I56K5x5b6WYGXHA==}
+
+  '@uwdata/flechette@2.2.6':
+    resolution: {integrity: sha512-DoeWHYWHvda7kaxa1BeKVp0+S9ZiqGoRxLC+z9uuYyfMLDQ+3vW4s4WVxnQYFJm8nshS5ezAsbKBN9ojCBtdEQ==}
 
   '@vitest/expect@2.1.8':
     resolution: {integrity: sha512-8ytZ/fFHq2g4PJVAtDX57mayemKgDR6X3Oa2Foro+EygiOJHUXhCqBAAKQYYajZpFoIfvBCF1j6R6IYRSIUFuw==}
@@ -1086,6 +1093,8 @@ snapshots:
   '@types/node@20.17.10':
     dependencies:
       undici-types: 6.19.8
+
+  '@uwdata/flechette@2.2.6': {}
 
   '@vitest/expect@2.1.8':
     dependencies:

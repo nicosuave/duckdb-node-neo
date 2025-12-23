@@ -1396,3 +1396,41 @@ export function copy_data_to_vector(target_vector: Vector, target_byte_offset: n
  * Performs an efficient-but-unsafe memory copy. Use with care.
  */
 export function copy_data_to_vector_validity(target_vector: Vector, target_byte_offset: number, source_buffer: ArrayBuffer, source_byte_offset: number, source_byte_count: number): void;
+
+/**
+ * Converts a DuckDB result to Arrow IPC stream format bytes.
+ *
+ * This function serializes the entire result (schema + all record batches)
+ * to Arrow IPC streaming format, which can be consumed by Arrow libraries
+ * like apache-arrow or flechette.
+ *
+ * @param result The DuckDB result to convert.
+ * @returns A Uint8Array containing the Arrow IPC stream bytes.
+ */
+export function result_to_arrow_ipc(result: Result): Uint8Array;
+
+/**
+ * Converts just the schema of a DuckDB result to Arrow IPC stream format bytes.
+ * This returns only the schema message, which should be the first part of an IPC stream
+ * when streaming results chunk by chunk.
+ *
+ * Use this together with data_chunk_to_arrow_ipc for streaming large results.
+ *
+ * @param result The DuckDB result to get the schema from.
+ * @returns A Uint8Array containing the Arrow IPC schema message bytes.
+ */
+export function result_schema_to_arrow_ipc(result: Result): Uint8Array;
+
+/**
+ * Converts a single DuckDB data chunk to Arrow IPC record batch bytes.
+ * This returns only the record batch message for the given chunk.
+ *
+ * Use this together with result_schema_to_arrow_ipc for streaming large results.
+ * The schema must be written first, then each chunk can be converted and streamed
+ * as record batches.
+ *
+ * @param chunk The DuckDB data chunk to convert.
+ * @param result The DuckDB result (needed for schema information).
+ * @returns A Uint8Array containing the Arrow IPC record batch bytes.
+ */
+export function data_chunk_to_arrow_ipc(chunk: DataChunk, result: Result): Uint8Array;

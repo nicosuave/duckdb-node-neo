@@ -302,4 +302,39 @@ export class DuckDBResult {
   public yieldRowObjectJson(): AsyncIterableIterator<Record<string, Json>[]> {
     return this.yieldConvertedRowObjects(JsonDuckDBValueConverter);
   }
+
+  /**
+   * Converts the result to Arrow IPC stream format bytes.
+   *
+   * This serializes the entire result (schema + all record batches) to Arrow IPC
+   * streaming format, which can be consumed by Arrow libraries like apache-arrow
+   * or flechette.
+   *
+   * @returns A Uint8Array containing the Arrow IPC stream bytes.
+   */
+  public toArrowIPC(): Uint8Array {
+    return duckdb.result_to_arrow_ipc(this.result);
+  }
+
+  /**
+   * Streams the result as Arrow IPC bytes, yielding chunks incrementally.
+   *
+   * This is useful for large results where you want to process data without
+   * loading everything into memory at once. The first yield is the schema
+   * message, followed by record batch messages for each data chunk.
+   *
+   * The yielded bytes can be concatenated to form a complete IPC stream,
+   * or processed individually by Arrow libraries that support streaming.
+   *
+   * @yields Uint8Array chunks - first the schema, then each record batch
+   */
+  public async *streamArrowIPC(): AsyncIterableIterator<Uint8Array> {
+    // Yield the schema first
+    yield duckdb.result_schema_to_arrow_ipc(this.result);
+
+    // Then yield each chunk as a record batch
+    for await (const chunk of this) {
+      yield duckdb.data_chunk_to_arrow_ipc(chunk.chunk, this.result);
+    }
+  }
 }
