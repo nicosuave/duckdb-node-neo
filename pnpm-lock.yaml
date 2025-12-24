@@ -37,6 +37,33 @@ importers:
         specifier: workspace:*
         version: link:../../../../bindings/pkgs/@duckdb/node-bindings
 
+  arrow-ipc:
+    dependencies:
+      '@duckdb/node-arrow-ipc':
+        specifier: workspace:*
+        version: link:pkgs/@duckdb/node-arrow-ipc
+      cross-replace:
+        specifier: ^0.2.0
+        version: 0.2.0
+      node-addon-api:
+        specifier: ^8.3.0
+        version: 8.3.0
+      node-gyp:
+        specifier: ^10.3.1
+        version: 10.3.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.7.2
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.8(@types/node@20.17.10)
+    devDependencies:
+      '@duckdb/node-bindings':
+        specifier: workspace:*
+        version: link:../bindings/pkgs/@duckdb/node-bindings
+
+  arrow-ipc/pkgs/@duckdb/node-arrow-ipc: {}
+
   bindings:
     dependencies:
       '@duckdb/node-bindings':

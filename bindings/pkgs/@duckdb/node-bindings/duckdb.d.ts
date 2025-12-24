@@ -1397,40 +1397,88 @@ export function copy_data_to_vector(target_vector: Vector, target_byte_offset: n
  */
 export function copy_data_to_vector_validity(target_vector: Vector, target_byte_offset: number, source_buffer: ArrayBuffer, source_byte_offset: number, source_byte_count: number): void;
 
-/**
- * Converts a DuckDB result to Arrow IPC stream format bytes.
- *
- * This function serializes the entire result (schema + all record batches)
- * to Arrow IPC streaming format, which can be consumed by Arrow libraries
- * like apache-arrow or flechette.
- *
- * @param result The DuckDB result to convert.
- * @returns A Uint8Array containing the Arrow IPC stream bytes.
- */
-export function result_to_arrow_ipc(result: Result): Uint8Array;
+// Arrow C Data Interface types and functions
+
+/** Opaque handle to Arrow options used for Arrow conversions. */
+export type ArrowOptions = Opaque<'ArrowOptions'>;
 
 /**
- * Converts just the schema of a DuckDB result to Arrow IPC stream format bytes.
- * This returns only the schema message, which should be the first part of an IPC stream
- * when streaming results chunk by chunk.
- *
- * Use this together with data_chunk_to_arrow_ipc for streaming large results.
- *
- * @param result The DuckDB result to get the schema from.
- * @returns A Uint8Array containing the Arrow IPC schema message bytes.
+ * An ArrowSchema exported via the Arrow C Data Interface.
+ * Contains a pointer to the schema and a release function.
  */
-export function result_schema_to_arrow_ipc(result: Result): Uint8Array;
+export interface ArrowSchemaExport {
+  /** Raw pointer to the ArrowSchema struct as a BigInt. */
+  pointer: bigint;
+  /** Release function that frees the ArrowSchema. Must be called when done. */
+  release: () => void;
+}
 
 /**
- * Converts a single DuckDB data chunk to Arrow IPC record batch bytes.
- * This returns only the record batch message for the given chunk.
- *
- * Use this together with result_schema_to_arrow_ipc for streaming large results.
- * The schema must be written first, then each chunk can be converted and streamed
- * as record batches.
- *
- * @param chunk The DuckDB data chunk to convert.
- * @param result The DuckDB result (needed for schema information).
- * @returns A Uint8Array containing the Arrow IPC record batch bytes.
+ * An ArrowArray exported via the Arrow C Data Interface.
+ * Contains a pointer to the array and a release function.
  */
-export function data_chunk_to_arrow_ipc(chunk: DataChunk, result: Result): Uint8Array;
+export interface ArrowArrayExport {
+  /** Raw pointer to the ArrowArray struct as a BigInt. */
+  pointer: bigint;
+  /** Release function that frees the ArrowArray. Must be called when done. */
+  release: () => void;
+}
+
+/**
+ * Get Arrow options from a connection.
+ * Arrow options control how data is converted to Arrow format.
+ *
+ * @param connection The DuckDB connection.
+ * @returns Arrow options handle.
+ */
+export function connection_get_arrow_options(connection: Connection): ArrowOptions;
+
+/**
+ * Get Arrow options from a result.
+ * Arrow options control how data is converted to Arrow format.
+ *
+ * @param result The DuckDB result.
+ * @returns Arrow options handle.
+ */
+export function result_get_arrow_options(result: Result): ArrowOptions;
+
+/**
+ * Destroy Arrow options. Optional since options are auto-destroyed by finalizer.
+ *
+ * @param arrow_options The Arrow options to destroy.
+ */
+export function destroy_arrow_options(arrow_options: ArrowOptions): void;
+
+/**
+ * Convert column types and names to an ArrowSchema via the Arrow C Data Interface.
+ *
+ * The returned schema pointer can be passed to other packages (e.g., for IPC serialization)
+ * using the BigInt pointer value. The release function MUST be called when done to free memory.
+ *
+ * @param arrow_options Arrow options from connection or result.
+ * @param types Array of logical types for each column.
+ * @param names Array of column names.
+ * @param column_count Number of columns.
+ * @returns An object with the schema pointer and release function.
+ */
+export function to_arrow_schema(
+  arrow_options: ArrowOptions,
+  types: LogicalType[],
+  names: string[],
+  column_count: number
+): ArrowSchemaExport;
+
+/**
+ * Convert a DataChunk to an ArrowArray via the Arrow C Data Interface.
+ *
+ * The returned array pointer can be passed to other packages (e.g., for IPC serialization)
+ * using the BigInt pointer value. The release function MUST be called when done to free memory.
+ *
+ * @param arrow_options Arrow options from connection or result.
+ * @param chunk The data chunk to convert.
+ * @returns An object with the array pointer and release function.
+ */
+export function data_chunk_to_arrow(
+  arrow_options: ArrowOptions,
+  chunk: DataChunk
+): ArrowArrayExport;

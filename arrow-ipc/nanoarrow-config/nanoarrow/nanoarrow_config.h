@@ -1,0 +1,25 @@
+// Minimal nanoarrow configuration for Arrow IPC support
+
+#ifndef NANOARROW_CONFIG_H_INCLUDED
+#define NANOARROW_CONFIG_H_INCLUDED
+
+#define NANOARROW_VERSION_MAJOR 0
+#define NANOARROW_VERSION_MINOR 6
+#define NANOARROW_VERSION_PATCH 0
+#define NANOARROW_VERSION "0.6.0"
+
+#define NANOARROW_VERSION_INT                                        \
+  (NANOARROW_VERSION_MAJOR * 10000 + NANOARROW_VERSION_MINOR * 100 + \
+   NANOARROW_VERSION_PATCH)
+
+// No namespace
+#define NANOARROW_NAMESPACE
+
+#if !defined(NANOARROW_CXX_NAMESPACE)
+#define NANOARROW_CXX_NAMESPACE nanoarrow
+#endif
+
+#define NANOARROW_CXX_NAMESPACE_BEGIN namespace NANOARROW_CXX_NAMESPACE {
+#define NANOARROW_CXX_NAMESPACE_END }
+
+#endif

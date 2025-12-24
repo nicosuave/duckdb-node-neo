@@ -4,20 +4,19 @@
     "build": "pnpm run build:package && pnpm run build:test",
     "build:package": "cross-replace node-gyp configure --verbose --nodedir=$NODE_DIR && node-gyp build --verbose --nodedir=$NODE_DIR",
     "build:test": "tsc -b test",
-    "clean": "pnpm run clean:gyp && pnpm run clean:libduckdb && pnpm run clean:package",
-    "clean:gyp": "node-gyp clean",
-    "clean:libduckdb": "rimraf libduckdb",
-    "clean:package": "rimraf pkgs/@duckdb/**/*.node pkgs/@duckdb/**/*.so pkgs/@duckdb/**/*.dylib pkgs/@duckdb/**/*.dll",
+    "clean": "node-gyp clean",
     "test": "./scripts/run-tests.sh",
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@duckdb/node-bindings": "workspace:*",
+    "@duckdb/node-arrow-ipc": "workspace:*",
     "cross-replace": "^0.2.0",
     "node-addon-api": "^8.3.0",
     "node-gyp": "^10.3.1",
-    "rimraf": "^5.0.10",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "devDependencies": {
+    "@duckdb/node-bindings": "workspace:*"
   }
 }

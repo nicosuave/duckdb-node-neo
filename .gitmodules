@@ -1,3 +1,3 @@
-[submodule "bindings/nanoarrow"]
-	path = bindings/nanoarrow
+[submodule "arrow-ipc/nanoarrow"]
+	path = arrow-ipc/nanoarrow
 	url = https://github.com/apache/arrow-nanoarrow

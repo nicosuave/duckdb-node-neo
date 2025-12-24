@@ -41,31 +41,8 @@
         'fetch_libduckdb',
         '<!(node -p "require(\'node-addon-api\').targets"):node_addon_api_except_all',
       ],
-      'sources': [
-        'src/duckdb_node_bindings.cpp',
-        # nanoarrow core
-        'nanoarrow/src/nanoarrow/common/array.c',
-        'nanoarrow/src/nanoarrow/common/array_stream.c',
-        'nanoarrow/src/nanoarrow/common/schema.c',
-        'nanoarrow/src/nanoarrow/common/utils.c',
-        # nanoarrow IPC
-        'nanoarrow/src/nanoarrow/ipc/codecs.c',
-        'nanoarrow/src/nanoarrow/ipc/decoder.c',
-        'nanoarrow/src/nanoarrow/ipc/encoder.c',
-        'nanoarrow/src/nanoarrow/ipc/reader.c',
-        'nanoarrow/src/nanoarrow/ipc/writer.c',
-        # flatcc runtime (required by nanoarrow IPC)
-        'nanoarrow/thirdparty/flatcc/src/runtime/builder.c',
-        'nanoarrow/thirdparty/flatcc/src/runtime/emitter.c',
-        'nanoarrow/thirdparty/flatcc/src/runtime/refmap.c',
-        'nanoarrow/thirdparty/flatcc/src/runtime/verifier.c',
-      ],
-      'include_dirs': [
-        '<(module_root_dir)/libduckdb',
-        '<(module_root_dir)/nanoarrow-config',
-        '<(module_root_dir)/nanoarrow/src',
-        '<(module_root_dir)/nanoarrow/thirdparty/flatcc/include',
-      ],
+      'sources': ['src/duckdb_node_bindings.cpp'],
+      'include_dirs': ['<(module_root_dir)/libduckdb'],
       'conditions': [
         ['OS=="linux" and target_arch=="x64"', {
           'link_settings': {
